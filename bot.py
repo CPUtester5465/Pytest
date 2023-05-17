@@ -1,167 +1,155 @@
 import telegram
-from telegram.ext import Updater, CommandHandler, MessageHandler, filters
 import requests
 from bs4 import BeautifulSoup
 
-# Замените <YOUR_BOT_TOKEN> на токен вашего бота Telegram
-bot_token = '6140734425:AAE60R_-aNBJJrTrooEw6CC8v_pbaeHpTaE'
-# Замените <MANAGER_USERNAME> на username аккаунта менеджера
+# Токен бота и username менеджера
+TOKEN = '6140734425:AAE60R_-aNBJJrTrooEw6CC8v_pbaeHpTaE'
 manager_username = 'timvista'
 
-# Инициализация бота
-bot = telegram.Bot(token=bot_token)
+# Создание объекта бота
+bot = telegram.Bot(token=TOKEN)
 
-class Product:
-    """Класс для представления информации о товаре"""
-    def __init__(self, name, image_url):
-        self.name = name
-        self.image_url = image_url
-
-def search_product(user_input):
-    """Поиск товара по артикулу или названию на сайте Nike.com"""
-    search_url = f'https://www.nike.com/w?q={user_input}'
-
-    # Отправка GET-запроса на страницу поиска
-    response = requests.get(search_url)
-
-    if response.status_code == 200:
-        # Создание объекта BeautifulSoup для парсинга HTML
-        soup = BeautifulSoup(response.content, 'html.parser')
-
-        # Поиск контейнера с товарами
-        products_container = soup.find('div', class_='product-grid')
-
-        if products_container:
-            # Поиск первого товара в контейнере
-            product_element = products_container.find('div', class_='product-card')
-
-            if product_element:
-                # Извлечение имени товара и URL изображения
-                product_name = product_element.find('div', class_='product-card__title').text.strip()
-                image_element = product_element.find('div', class_='product-card__hero-image')
-                image_url = image_element.find('img')['src']
-
-                return Product(product_name, image_url)
-
-    # Если товар не найден, возвращаем None
-    return None
-
+# Обработч команды /start
 def start(update, context):
-    """Обработчик команды /start"""
-    message = "Добро пожаловать! Введите артикул или название товара с сайта Nike.com:"
-    context.bot.send_message(chat_id=update.effective_chat.id, text=message)
+    context.bot.send_message(chat_id=update.effective_chat.id, text="3Привет! Введите артикул или название товара с сайта Nike.com")
 
-def process_input(update, context):
-    """Обработка введенного пользователем текста"""
-    user_input = update.message.text
+# Обработчик сообщений
+def echo(update, context):
+    # Получение текста сообщения
+    text = update.message.text
 
-    # Поиск товара по артикулу или названию на сайте Nike.com
-    product = search_product(user_input)
+    # Поиск товара на сайте Nike.com
+    url = 'https://www.nike.com/w?q=' + text
+    response = requests.get(url)
+    soup = BeautifulSoup(response.text, 'html.parser')
+    product = soup.find('div', {'class': 'product-card__body'})
 
-    if product:
-        # Товар найден
-        image_url = product.image_url
-        context.bot.send_photo(chat_id=update.effective_chat.id, photo=image_url)
+    # Если товар не найден, ищем наиболее подходящую позицию
+    if not product:
+        product = soup.find('div', {'class': 'product-card__body'})
 
-        # Запрос размера
-        context.user_data['product'] = product
-        context.user_data['size'] = True
-        message = "Введите размер товара:"
-        context.bot.send_message(chat_id=update.effective_chat.id, text=message)
-    else:
-        # Товар не найден
-        message = "Товар не найден. Введите другой артикул или название товара."
-        context.bot.send_message(chat_id=update.effective_chat.id, text=message)
+    # Получение ссылки на товар
+    product_url = 'https://www.nike.com' + product.find('a')['href']
 
-def handle_size(update, context):
-    """Обработка введенного размера"""
+    # Сохранение ссылки на товар в контексте пользователя
+    context.user_data['product_url'] = product_url
+
+    # Отправка ссылки на товар
+    context.bot.send_message(chat_id=update.effective_chat.id, text=product_url)
+
+    # Запрос размера
+    context.bot.send_message(chat_id=update.effective_chat.id, text="Введите размер товара")
+
+    # Ожидание ответа пользователя
+    context.user_data['product_size'] = None
+    return 'SIZE'
+
+# Обработчик ответа на запрос размера
+def size(update, context):
+    # Получение ответа пользователя
     size = update.message.text
-    product = context.user_data.get('product')
 
-    if product and context.user_data.get('size'):
-        # Обработка размера товара
-        context.user_data['size'] = size
+    # Сохранение ответа в контексте пользователя
+    context.user_data['product_size'] = size
 
-        # Запрос количества товара
-        message = "Введите количество товара:"
-        context.bot.send_message(chat_id=update.effective_chat.id, text=message)
-        context.user_data['quantity'] = True
-    else:
-        # Размер не ожидается
-        message = "Извините, я не ожидал размера. Пожалуйста, попробуйте снова."
-        context.bot.send_message(chat_id=update.effective_chat.id, text=message)
+    # Получение ссылки на товар из контекста пользователя
+    product_url = context.user_data['product_url']
 
-def handle_quantity(update, context):
-    """Обработка введенного количества"""
+    # Поиск информации о товаре на сайте Nike.com
+    response = requests.get(product_url)
+    soup = BeautifulSoup(response.text, 'html.parser')
+    sizes = soup.find_all('div', {'class': 'size-grid-dropdown__item'})
+    price = soup.find('div', {'class': 'product-price__wrapper'}).text.strip()
+
+    # Поиск размера, который ввел пользователь
+    size = next((s for s in sizes if context.user_data['product_size'] in s.text), None)
+
+    # Если размер не найден, сообщаем об этом пользователю
+    if not size:
+        context.bot.send_message(chat_id=update.effective_chat.id, text="Размер не найден. Попробуйте еще раз.")
+        return 'SIZE'
+
+    # Получение цены товара
+    price = price.split('\n')[0]
+
+    # Формирование сообщения о товаре и его цене
+    product_info = f"Товар: {text}\nРазмер: {size.text}\nЦена: {price}"
+
+    # Отправка сообщения о товаре и его цене пользователю
+    context.bot.send_message(chat_id=update.effective_chat.id, text=product_info)
+
+    # Запрос количества товара
+    context.bot.send_message(chat_id=update.effective_chat.id, text="Введите количество товара")
+
+    # Ожидание ответа пользователя
+    return 'QUANTITY'
+
+# Обработчик ответа на запрос количества товара
+def quantity(update, context):
+    # Получение ответа пользователя
     quantity = update.message.text
-    product = context.user_data.get('product')
 
-    if product and context.user_data.get('quantity'):
-        # Обработка количества товара
-        context.user_data['quantity'] = quantity
+    # Сохранение ответа в контексте пользователя
+    context.user_data['product_quantity'] = quantity
 
-        # Запрос адреса доставки
-        message = "Введите адрес доставки:"
-        context.bot.send_message(chat_id=update.effective_chat.id, text=message)
-        context.user_data['address'] = True
-    else:
-        # Количество не ожидается
-        message = "Извините, я не ожидал количество. Пожалуйста, попробуйте снова."
-        context.bot.send_message(chat_id=update.effective_chat.id, text=message)
+    # Запрос адреса доставки
+    context.bot.send_message(chat_id=update.effective_chat.id, text="Введите адрес доставки")
 
-def handle_address(update, context):
-    """Обработка введенного адреса"""
+    # Ожидание ответа пользователя
+    return 'ADDRESS'
+
+# Обработчик ответа на запрос адреса доставки
+def address(update, context):
+    # Получение ответа пользователя
     address = update.message.text
-    product = context.user_data.get('product')
 
-    if product and context.user_data.get('address'):
-        # Обработка адреса доставки
-        context.user_data['address'] = address
+    # Сохранение ответа в контексте пользователя
+    context.user_data['product_address'] = address
 
-        # Формирование сообщения с информацией о заказе
-        order_info = f"Пользователь @{update.effective_user.username} оформил заказ:\n\n"
-        order_info += f"Товар: {product.name}\n"
-        order_info += f"Размер: {context.user_data['size']}\n"
-        order_info += f"Количество: {context.user_data['quantity']}\n"
-        order_info += f"Адрес доставки: {context.user_data['address']}"
+    # Формирование сообщения о заказе
+    order_info = f"Пользователь @{update.message.from_user.username} заказал товар {text} в количестве {context.user_data['product_quantity']} размера {context.user_data['product_size']} по адресу {context.user_data['product_address']}"
 
-        # Отправка сообщения на аккаунт менеджера
-        bot.send_message(chat_id=manager_username, text=order_info)
+    # Отправка сообщения о заказе на аккаунт менеджера
+    context.bot.send_message(chat_id=manager_username, text=order_info)
 
-        # Сообщение пользователю об успешном оформлении заказа
-        success_message = "Ваш заказ успешно оформлен. Менеджер свяжется с вами для подтверждения."
-        context.bot.send_message(chat_id=update.effective_chat.id, text=success_message)
+    # Отправка подтверждения заказа пользователю
+    context.bot.send_message(chat_id=update.effective_chat.id, text="Ваш заказ принят. Спасбо!")
 
-        # Сброс данных пользователя
-        context.user_data.clear()
-    else:
-        # Адрес не ожидается
-        message = "Извините, я не ожидал адреса. Пожалуйста, попробуйте снова."
-        context.bot.send_message(chat_id=update.effective_chat.id, text=message)
+    # Очистка контекста пользователя
+    context.user_data.clear()
 
-def main():
-    """Основная функция для запуска бота"""
-    # Инициализация Updater и Dispatcher
-    updater = Updater(bot_token, use_context=True)
-    dispatcher = updater.dispatcher
+    # Запрос нового товара
+    context.bot.send_message(chat_id=update.effective_chat.id, text="Введите артикул или название товара с сайта Nike.com")
 
-    # Обработчики команд и текстовых сообщений
-    start_handler = CommandHandler('start', start)
-    input_handler = MessageHandler(Filters.text & ~Filters.command, process_input)
-    size_handler = MessageHandler(Filters.text & ~Filters.command, handle_size)
-    quantity_handler = MessageHandler(Filters.text & ~Filters.command, handle_quantity)
-    address_handler = MessageHandler(Filters.text & ~Filters.command, handle_address)
+    # Ожидание ответа пользователя
+    return 'PRODUCT'
 
-    # Регистрация обработчиков
-    dispatcher.add_handler(start_handler)
-    dispatcher.add_handler(input_handler)
-    dispatcher.add_handler(size_handler)
-    dispatcher.add_handler(quantity_handler)
-    dispatcher.add_handler(address_handler)
+# Создание обработчиков команд и сообщений
+from telegram.ext import CommandHandler, MessageHandler, Filters, ConversationHandler
+start_handler = CommandHandler('start', start)
+product_handler = MessageHandler(Filters.text & (~Filters.command), echo)
+size_handler = MessageHandler(Filters.text & (~Filters.command), size)
+quantity_handler = MessageHandler(Filters.text & (~Filters.command), quantity)
+address_handler = MessageHandler(Filters.text & (~Filters.command), address)
+conv_handler = ConversationHandler(
+    entry_points=[product_handler],
+    states={
+        'SIZE': [size_handler],
+        'QUANTITY': [quantity_handler],
+        'ADDRESS': [address_handler],
+        'PRODUCT': [product_handler]
+    },
+    fallbacks=[],
+    allow_reentry=True
+)
 
-    # Запуск бота
-    updater.start_polling()
-    updater.idle()
+# Добавление обработчиков в диспетчер
+from telegram.ext import Updater
+updater = Updater(token=TOKEN, use_context=True)
+dispatcher = updater.dispatcher
+dispatcher.add_handler(start_handler)
+dispatcher.add_handler(conv_handler)
 
-if __name__ == '__main__':
-    main()
+# Запуск бота
+updater.start_polling()
+
